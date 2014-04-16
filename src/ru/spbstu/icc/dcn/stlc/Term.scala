@@ -257,7 +257,7 @@ class TermParsers extends RegexParsers {
   //        | "{" term "," term "}"
   //        | "(" term ")"
   //а теперь мое творчество
-  //		|"if" "Bool" "then" term "else" term
+  //		|"if" term "then" term "else" term
   
   // Грамматику языка типов представим в следующем виде:
   // ty ::= typrim | typrim "->" ty
@@ -349,5 +349,6 @@ class TermParsers extends RegexParsers {
 	| identifier ^^ (x => Var(x))
 	| "{"~> term~(","~> term) <~ "}" ^^ { case fst~snd => Pair(fst, snd) }
 	| "("~> term <~")"
+//	| kwdIf ~> term ~>
 	)
 }
