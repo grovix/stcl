@@ -67,6 +67,16 @@ case class Snd(pair: Term) extends Term {
   override def toString = s"snd $pair"
 }
 
+case class IfThEl(i: Term, t: Term, e: Term) extends Term {
+  override def toString = s"if $i then $t else $e"
+}
+case class addop(a: Term, b:Term, op: String) extends Term{
+  override def toString = s"$a $op $b"
+}
+
+case class multop(a: Term, b:Term, op: String) extends Term{
+  override def toString = s"$a $op $b"
+}
 // Сопровождающий объект, реализующий операции над термами.
 object Term {
   // Парсер термов
@@ -145,6 +155,28 @@ object Term {
     case Snd(pair) =>
       for (PairType(fstType, sndType) <- typeOf(pair, env))
         yield sndType
+        
+    case IfThEl(i,t,e) =>
+      for(itype <- typeOf(i,env)
+          if itype == BoolType;
+    		  ttype <- typeOf(t,env);
+    		  etype <- typeOf(e,env)
+    		  if ttype == etype)
+        yield ttype
+        
+    case addop(a,b,op) =>
+      for(atype <- typeOf(a,env)
+          if atype == IntType;
+    		  btype <- typeOf(b,env)
+    		  if btype == IntType)
+       yield IntType
+       
+    case multop(a,b,op) =>
+      for(atype <- typeOf(a,env);
+          btype <- typeOf(b,env)
+          if atype == IntType
+    		  if atype == btype)
+       yield IntType   
   }
   
   // Вычисление значения терма.
@@ -216,6 +248,51 @@ object Term {
     case Snd(pair) =>
       for (PairVal(fstValue, sndValue) <- eval(pair, env))
         yield sndValue
+        
+    case IfThEl(i,t,e) =>
+      eval(i,env) match{
+        case Some(BoolVal(true)) => eval (t,env)
+        case Some(BoolVal(false)) => eval (e,env)
+        case _ => None
+      }
+      
+    case addop(a,b,op) =>{
+      eval(a,env) match{
+        case Some(IntVal(aval)) =>{
+          eval(b,env) match{
+            case Some(IntVal(bval))=> {
+              op match{
+                case "+" => Some(IntVal(aval+bval))
+                case "-" => Some(IntVal(aval - bval))
+              }
+            }
+            case _ => None
+          }
+        }
+        case _=> None
+      }
+    }
+    
+    case multop(a,b,op) =>{
+      eval(a,env) match{
+        case Some(IntVal(aval)) =>{
+          eval(b,env) match{
+            case Some(IntVal(bval))=> {
+              op match{
+                case "*" => Some(IntVal(aval*bval))
+                case "/" => bval match {
+                    case 0 => None
+                    case _ => Some(IntVal(aval/bval))
+                  }
+              }
+            }
+            case _ => None
+          }
+        }
+        case _=> None
+      }
+    }
+    
   }
  
   // Вспомогательная функция: применение замыкания к аргументу.
@@ -256,8 +333,6 @@ class TermParsers extends RegexParsers {
   //        | identifier
   //        | "{" term "," term "}"
   //        | "(" term ")"
-  //а теперь мое творчество
-  //		|"if" term "then" term "else" term
   
   // Грамматику языка типов представим в следующем виде:
   // ty ::= typrim | typrim "->" ty
@@ -281,6 +356,8 @@ class TermParsers extends RegexParsers {
   val kwdIf: Parser[String] = "if\\b".r
   val kwdThen: Parser[String] = "then\\b".r
   val kwdElse: Parser[String] = "else\\b".r
+  val kwdFi: Parser[String] = "fi\\b".r
+  
   
   // Парсер любого ключевого слова
   val reserved: Parser[String] =
@@ -289,7 +366,7 @@ class TermParsers extends RegexParsers {
     | kwdFst | kwdSnd
     | kwdInt | kwdBool
     | kwdIf | kwdThen
-    | kwdElse
+    | kwdElse |kwdFi
     )
       
   // Идентификатор
@@ -318,6 +395,27 @@ class TermParsers extends RegexParsers {
     | "("~> ty <~")"
     )
   
+  		//Попробуем грамматику как в 9 лекции Карпова
+  def Expr : Parser[Term] = (
+    (Texpr<~"+") ~ Expr ^^ { case a~b => addop(a,b,"+")}
+  //  |(Texpr<~"-") ~ (Texpr<~"+")~Expr ^^ { case a~b~c => addop(addop(a,b,"-"),c,"+")}
+   // |(Texpr<~"-") ~ (Texpr<~"-")~Expr ^^ { case a~b~c => addop(addop(a,b,"-"),c,"-")}
+    |(Texpr<~"-") ~ Expr ^^ { case a~b => addop(a,b,"-")}
+    |Texpr
+    )
+  
+  def Texpr : Parser[Term] = (
+    (Pexpr<~"*") ~ Texpr ^^ { case a~b => multop(a,b,"*")}
+    |(Pexpr<~"/") ~ Texpr ^^ { case a~b => multop(a,b,"/")}
+    |Pexpr
+    )
+    
+  def Pexpr : Parser[Term] = (
+    number ^^ (x => IntConst(x.toInt))
+	|identifier ^^ (x => Var(x))
+	| "("~> Expr <~")"
+    )  
+  
   // Обратите внимание, что правило prim ::= ident идет после всех правил,
   // которые начинаются с "true", "false, "fst", "snd". Дело в том, что
   // парсер ident примет любую последовательность символов, которая удовлетворяет
@@ -331,13 +429,15 @@ class TermParsers extends RegexParsers {
   // преобразовать в дерево применений функции к аргументу. Это можно сделать, свернув
   // полученный список слева.
   def term: Parser[Term] =
-	rep1(prim) ^^ (_.reduce((fn, arg) => App(fn, arg)))
-	
+	rep1(prim) ^^ (_.reduce((fn, arg) => App(fn, arg)))	
+
+
   // Устройство парсера prim аналогично устройству парсера typrim для типов.
   def prim: Parser[Term] =
 	( kwdTrue ^^ (_ => BoolConst(true))
 	| kwdFalse ^^ (_ => BoolConst(false))
-	| number ^^ (x => IntConst(x.toInt))
+	| Expr
+	//| number ^^ (x => IntConst(x.toInt))
 	| "["~> ((identifier <~":")~ty <~"=>")~term <~"]" ^^ {
 	    case id~ty~body => Fun(id, ty, body)
 	  }
@@ -349,6 +449,7 @@ class TermParsers extends RegexParsers {
 	| identifier ^^ (x => Var(x))
 	| "{"~> term~(","~> term) <~ "}" ^^ { case fst~snd => Pair(fst, snd) }
 	| "("~> term <~")"
-//	| kwdIf ~> term ~>
+	| kwdIf ~> term ~ (kwdThen ~> term) ~ (kwdElse ~> term <~ kwdFi) ^^ { case i~t~e => IfThEl(i, t, e) }
 	)
+	
 }
